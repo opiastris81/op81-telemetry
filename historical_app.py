@@ -302,7 +302,13 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
             )
             return placeholder_view, empty_weather, empty_strat, "waiting to load :)"
 
-    session = load_past_session(2026, gp, session_type)
+    session = None
+    try:
+        # Only attempt live scraping if running locally or if precomputed files do not exist
+        if not os.path.exists(os.path.join("precomputed_data", f"{gp}_PIA.parquet")):
+            session = load_past_session(2026, gp, session_type)
+    except Exception:
+        session = None
 
     # 1. DYNAMIC WEATHER EXTRACTION
     w = get_session_weather(session)
@@ -344,11 +350,11 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
 
     # TAB 1: TELEMETRY (OSCAR SOLO BY DEFAULT -> RIVAL ADDED ON SELECTION)
     if active_tab == "tab-telemetry":
-        df_pia, t_pia, comp_pia = get_telemetry_trace(session, "PIA")
+        df_pia, t_pia, comp_pia = get_telemetry_trace(session, "PIA", gp=gp)
 
         df_riv, t_riv, comp_riv = (pd.DataFrame(), "--", "--")
         if rival_code:
-            df_riv, t_riv, comp_riv = get_telemetry_trace(session, rival_code)
+            df_riv, t_riv, comp_riv = get_telemetry_trace(session, rival_code, gp=gp)
 
         fig = make_subplots(
             rows=4, cols=1,
@@ -451,7 +457,7 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
 
     # TAB 3: CIRCUIT GPS TRACE
     elif active_tab == "tab-gps":
-        coords = get_track_circuit_coords(session)
+        coords = get_track_circuit_coords(session, gp=gp)
         fig_gps = go.Figure()
         if not coords.empty:
             fig_gps.add_trace(go.Scatter(

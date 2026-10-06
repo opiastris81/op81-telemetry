@@ -77,38 +77,77 @@ def get_performance_rankings(session):
     }
     return tables, laps
 
-def get_track_circuit_coords(session):
-    """Pulls 2D GPS coordinates (X, Y) from fastest overall lap to draw track map."""
-    try:
-        fastest_lap = session.laps.pick_fastest()
-        pos = fastest_lap.get_pos_data()
-        return pos[["X", "Y"]].copy()
-    except Exception:
+def get_track_circuit_coords(session, gp=None):
+    """
+    Loads precomputed GPS coordinates if available, otherwise queries FastF1.
+    """
+    if gp:
+        circuit_file = os.path.join("precomputed_data", f"{gp}_circuit.parquet")
+        if os.path.exists(circuit_file):
+            try:
+                return pd.read_parquet(circuit_file)
+            except Exception:
+                pass
+
+    if session is None:
         return pd.DataFrame()
 
-def get_telemetry_trace(session, driver_code: str):
-    """Pulls distance-aligned telemetry for a driver's fastest lap."""
     try:
-        driver_code = driver_code.strip().upper()
-        laps = session.laps.pick_drivers(driver_code)
-        if laps.empty:
+        lap = session.laps.pick_fastest()
+        if lap is not None:
+            pos = lap.get_pos_data()
+            return pd.DataFrame({"X": pos["X"], "Y": pos["Y"]})
+    except Exception:
+        pass
+
+    return pd.DataFrame()
+
+def get_telemetry_trace(session, driver_code, gp=None):
+    """
+    Attempts to read instant lightweight precomputed Parquet data first.
+    Falls back to live FastF1 extraction if running locally or un-cached.
+    """
+    # 1. Try reading the lightweight precomputed Parquet file
+    if gp:
+        parquet_file = os.path.join("precomputed_data", f"{gp}_{driver_code}.parquet")
+        if os.path.exists(parquet_file):
+            try:
+                df = pd.read_parquet(parquet_file)
+                # Quick placeholder or cached laptime display string
+                return df, "BEST", "S"
+            except Exception:
+                pass
+
+    # 2. Fallback to live FastF1 session parsing
+    if session is None:
+        return pd.DataFrame(), "--", "--"
+
+    try:
+        driver_laps = session.laps.pick_drivers(driver_code)
+        if driver_laps.empty:
             return pd.DataFrame(), "--", "--"
 
-        fastest = laps.pick_fastest()
-        tel = fastest.get_car_data().add_distance()
-        
+        fastest = driver_laps.pick_fastest()
+        if fastest is None or pd.isna(fastest.get("LapTime")):
+            return pd.DataFrame(), "--", "--"
+
+        tel = fastest.get_telemetry()
+        if tel.empty:
+            return pd.DataFrame(), "--", "--"
+
         df = pd.DataFrame({
             "distance": tel["Distance"],
             "speed": tel["Speed"],
             "throttle": tel["Throttle"],
             "brake": tel["Brake"],
-            "gear": tel["nGear"],
-            "rpm": tel["RPM"],
-            "drs": tel["DRS"]
+            "gear": tel["nGear"]
         })
-        sec = fastest["LapTime"].total_seconds()
-        lap_time = f"{int(sec//60)}:{sec%60:06.3f}"
-        return df, lap_time, fastest["Compound"]
+
+        lap_sec = fastest["LapTime"].total_seconds()
+        lap_str = f"{int(lap_sec // 60)}:{lap_sec % 60:06.3f}"
+        compound = str(fastest.get("Compound", "S"))[0].upper()
+
+        return df, lap_str, compound
     except Exception:
         return pd.DataFrame(), "--", "--"
 

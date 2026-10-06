@@ -439,7 +439,20 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
 
     # TAB 2: SECTOR RANKINGS
     elif active_tab == "tab-rankings":
-        rank_tables, _ = get_performance_rankings(session)
+        rank_tables = {}
+        # Try reading precomputed ranking tables first
+        for key in ["s1", "s2", "s3", "fastest", "theo"]:
+            fpath = os.path.join("precomputed_data", f"{gp}_rank_{key}.parquet")
+            if os.path.exists(fpath):
+                try:
+                    rank_tables[key] = pd.read_parquet(fpath)
+                except Exception:
+                    pass
+
+        # Fallback to live session if no precomputed files exist
+        if not rank_tables and session is not None:
+            rank_tables, _ = get_performance_rankings(session)
+
         if not rank_tables:
             return html.Div("No lap times available for rankings.", style={"padding": "30px", "color": "#7e889b"}), weather_ui, strategy_ui, status_msg
 
@@ -475,21 +488,42 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
 
     # TAB 4: OSCAR BROADCAST TIMING MATRIX
     elif active_tab == "tab-pace":
-        laps = session.laps.pick_drivers("PIA").copy().sort_values("LapNumber")
+        laps_file = os.path.join("precomputed_data", f"{gp}_PIA_laps.parquet")
+        laps = pd.DataFrame()
+
+        if os.path.exists(laps_file):
+            try:
+                laps = pd.read_parquet(laps_file)
+            except Exception:
+                pass
+        elif session is not None:
+            try:
+                laps = session.laps.pick_drivers("PIA").copy()
+                laps["Lap_s"] = laps["LapTime"].dt.total_seconds()
+                laps["S1_s"] = laps["Sector1Time"].dt.total_seconds()
+                laps["S2_s"] = laps["Sector2Time"].dt.total_seconds()
+                laps["S3_s"] = laps["Sector3Time"].dt.total_seconds()
+                laps["PitIn"] = laps["PitInTime"].notnull()
+                laps["PitOut"] = laps["PitOutTime"].notnull()
+            except Exception:
+                pass
+
         if laps.empty:
             return html.Div("No lap data for Oscar in this session.", style={"padding": "30px"}), weather_ui, strategy_ui, status_msg
 
-        laps["Lap_s"] = laps["LapTime"].dt.total_seconds()
-        laps["S1_s"] = laps["Sector1Time"].dt.total_seconds()
-        laps["S2_s"] = laps["Sector2Time"].dt.total_seconds()
-        laps["S3_s"] = laps["Sector3Time"].dt.total_seconds()
+        laps = laps.sort_values("LapNumber")
+        if "Lap_s" not in laps.columns and "LapTime_s" in laps.columns:
+            laps["Lap_s"] = laps["LapTime_s"]
+            laps["S1_s"] = laps["Sector1Time_s"]
+            laps["S2_s"] = laps["Sector2Time_s"]
+            laps["S3_s"] = laps["Sector3Time_s"]
 
         overall_fastest_lap = laps["Lap_s"].min()
         overall_fastest_s1 = laps["S1_s"].min()
         overall_fastest_s2 = laps["S2_s"].min()
         overall_fastest_s3 = laps["S3_s"].min()
 
-        valid_laps = laps.dropna(subset=["LapTime"]).copy()
+        valid_laps = laps.dropna(subset=["Lap_s"]).copy()
         valid_laps["prev_best_lap"] = valid_laps["Lap_s"].shift(1).cummin()
         valid_laps["prev_best_s1"] = valid_laps["S1_s"].shift(1).cummin()
         valid_laps["prev_best_s2"] = valid_laps["S2_s"].shift(1).cummin()
@@ -508,12 +542,12 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
 
         def format_lap_row(row):
             num = row["LapNumber"]
-            is_in = pd.notnull(row.get("PitInTime"))
-            is_out = pd.notnull(row.get("PitOutTime"))
+            is_in = row.get("PitIn", False)
+            is_out = row.get("PitOut", False)
 
             if is_in: lap_str, lap_status = "IN LAP", "PIT"
             elif is_out: lap_str, lap_status = "OUT LAP", "PIT"
-            elif pd.isna(row["LapTime"]): lap_str, lap_status = "NO TIME", "PIT"
+            elif pd.isna(row.get("Lap_s")): lap_str, lap_status = "NO TIME", "PIT"
             else:
                 sec = row["Lap_s"]
                 lap_str = f"{int(sec//60)}:{sec%60:06.3f}"
@@ -521,15 +555,15 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
                 elif pd.notnull(pb_map_lap.get(num)) and sec < (pb_map_lap.get(num) - 0.001): lap_status = "GREEN"
                 else: lap_status = "DEFAULT"
 
-            s1_status = resolve_sector_status(row["S1_s"], pb_map_s1.get(num), overall_fastest_s1)
-            s2_status = resolve_sector_status(row["S2_s"], pb_map_s2.get(num), overall_fastest_s2)
-            s3_status = resolve_sector_status(row["S3_s"], pb_map_s3.get(num), overall_fastest_s3)
+            s1_status = resolve_sector_status(row.get("S1_s"), pb_map_s1.get(num), overall_fastest_s1)
+            s2_status = resolve_sector_status(row.get("S2_s"), pb_map_s2.get(num), overall_fastest_s2)
+            s3_status = resolve_sector_status(row.get("S3_s"), pb_map_s3.get(num), overall_fastest_s3)
 
             return (
                 lap_str, lap_status,
-                f"{row['S1_s']:.3f}" if pd.notnull(row['S1_s']) else "--", s1_status,
-                f"{row['S2_s']:.3f}" if pd.notnull(row['S2_s']) else "--", s2_status,
-                f"{row['S3_s']:.3f}" if pd.notnull(row['S3_s']) else "--", s3_status,
+                f"{row['S1_s']:.3f}" if pd.notnull(row.get('S1_s')) else "--", s1_status,
+                f"{row['S2_s']:.3f}" if pd.notnull(row.get('S2_s')) else "--", s2_status,
+                f"{row['S3_s']:.3f}" if pd.notnull(row.get('S3_s')) else "--", s3_status,
             )
 
         processed_rows = [format_lap_row(row) for _, row in laps.iterrows()]
@@ -572,6 +606,7 @@ def render_pitwall_console(n_clicks, active_tab, gp, session_type, rival_code):
             page_size=20
         )
         return pace_table, weather_ui, strategy_ui, status_msg
+
 
     # TAB 5: OSCAR 2026 CAMPAIGN STATS (AUTO-SYNC READY + GUARANTEED DISPLAY)
     elif active_tab == "tab-season":

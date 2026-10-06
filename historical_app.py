@@ -104,13 +104,18 @@ CIRCUIT_STRATEGY_PROFILES = {
 }
 
 def make_rank_table(df, title, header_col):
+    df_clean = df.copy()
+    # Ensure all data is pure string so Dash DataTable never rejects PyArrow/Timedeltas
+    for col in df_clean.columns:
+        df_clean[col] = df_clean[col].astype(str)
+        
     return html.Div(
         style={"backgroundColor": "#0d1015", "border": "1px solid #1a202c", "padding": "8px", "borderRadius": "4px", "minWidth": "160px", "flex": "1"},
         children=[
             html.H5(title, style={"color": "#ffa4d9", "fontSize": "10px", "margin": "0 0 6px 0", "fontWeight": "800", "letterSpacing": "0.5px"}),
             dash_table.DataTable(
-                columns=[{"name": "DVR", "id": "Driver"}, {"name": header_col, "id": df.columns[1]}],
-                data=df.to_dict("records"),
+                columns=[{"name": "DVR", "id": "Driver"}, {"name": header_col, "id": df_clean.columns[1]}],
+                data=df_clean.to_dict("records"),
                 style_header={"backgroundColor": "#13171e", "color": "#7e889b", "fontSize": "10px", "border": "none", "fontWeight": "bold"},
                 style_cell={"backgroundColor": "#090a0d", "color": "#fff", "fontSize": "11px", "padding": "5px 6px", "border": "1px solid #141820", "textAlign": "center"}
             )
